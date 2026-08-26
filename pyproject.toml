@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "memlayer"
+version = "0.4.0"
+description = "Give any LLM permanent memory — /save facts once, every backend remembers. Works with Ollama, vLLM, Hugging Face, and any OpenAI-compatible server. Zero required dependencies."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "Ali" }]
+keywords = ["llm", "memory", "rag", "ollama", "vllm", "huggingface", "personalization"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+[project.scripts]
+memlayer = "memlayer.cli:main"
+
+[project.optional-dependencies]
+huggingface = ["transformers", "torch", "accelerate"]
+semantic = ["sentence-transformers", "numpy"]
+ner = ["spacy"]
+all = ["transformers", "torch", "accelerate", "sentence-transformers", "numpy", "spacy"]
+
+[tool.setuptools.packages.find]
+include = ["memlayer*"]
