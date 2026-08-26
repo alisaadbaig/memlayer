@@ -26,6 +26,8 @@ HELP = (
     "  /stats                        — memory statistics\n"
     "  /export [file] /import <file> — backup / restore JSON\n"
     "  /block <term> /unblock <term>  — manage prohibited terms\n"
+    "  /history <keyword>            — see current + superseded versions\n"
+    "  /auto on|off                  — suggest memories from conversation\n"
     "  /blocked                      — list prohibited terms\n"
     "  /profile <name>               — switch memory profile\n"
     "  /enable [password]  /lock     — secure mode unlock / lock\n"
@@ -62,12 +64,14 @@ class MemoryAgent:
         self.max_context_tokens = max_context_tokens
         self.history: deque = deque(maxlen=history_turns * 2)
         self._last_saved_id: Optional[str] = None
+        self.auto_extract = False
 
     # ------------------------------------------------------------------
     # save helper (expiry flag, contradiction check, force)
     # ------------------------------------------------------------------
 
-    def _do_save(self, payload: str, force: bool) -> str:
+    def _do_save(self, payload: str, force: bool,
+                 supersedes: str = None) -> str:
         expires_in = None
         m = re.match(r"--expires\s+(\S+)\s+(.*)", payload, re.DOTALL)
         if m:
@@ -86,16 +90,18 @@ class MemoryAgent:
             if dup:
                 return (f"A similar memory exists [{dup['id']}] "
                         f"({dup['keyword']}): \"{dup['text']}\"\n"
-                        f"  /replace {dup['id']} {keyword} {fact}   — update it\n"
-                        f"  /save! {keyword} {fact}                — keep both")
+                        f"  /replace {dup['id']} {keyword} {fact}   — supersede it (kept as history)\n"
+                        f"  /save! {keyword} {fact}                — keep both active")
         try:
-            rec = self.store.save(fact, keyword=keyword, expires_in=expires_in)
+            rec = self.store.save(fact, keyword=keyword, expires_in=expires_in,
+                                  supersedes=supersedes)
         except (ValueError, PermissionError) as e:
             return str(e)
         self._last_saved_id = rec["id"]
         extra = f"  [{'; '.join(rec['warnings'])}]" if rec.get("warnings") else ""
         exp = f" (expires {rec['expires_at']})" if rec.get("expires_at") else ""
-        return f'Saved [{rec["id"]}] ({rec["keyword"]}): "{rec["text"]}"{exp}{extra}'
+        sup = f" — superseded [{rec['supersedes']}]" if rec.get("supersedes") else ""
+        return f'Saved [{rec["id"]}] ({rec["keyword"]}): "{rec["text"]}"{exp}{sup}{extra}'
 
     # ------------------------------------------------------------------
 
@@ -132,7 +138,7 @@ class MemoryAgent:
         # everything below touches memory -> lock check
         needs_unlock = ("/save", "/replace", "/undo", "/search", "/memories",
                         "/list", "/forget", "/clear", "/stats", "/export",
-                        "/import", "/block", "/unblock", "/blocked")
+                        "/import", "/block", "/unblock", "/blocked", "/history")
         if any(low.startswith(c) for c in needs_unlock) \
                 and not self.store.security.check():
             return LOCKED_MSG
@@ -169,9 +175,33 @@ class MemoryAgent:
             if len(parts) < 2:
                 return "Usage: /replace <id> <keyword> <fact>"
             mem_id, remainder = parts
-            if not self.store.forget(mem_id):
-                return f"No memory found with id {mem_id}."
-            return self._do_save(remainder, force=True)
+            return self._do_save(remainder, force=True, supersedes=mem_id)
+
+        if low.startswith("/history"):
+            kw = t[8:].strip().strip('"').strip("'")
+            if not kw:
+                return "Usage: /history <keyword>"
+            chain = self.store.history(kw)
+            if not chain:
+                return f'No memories under keyword "{kw}".'
+            lines = []
+            for m in chain:
+                mark = "ACTIVE " if m["status"] == "active" else "old    "
+                lines.append(f'{mark}[{m["id"]}] {m["text"]}  '
+                             f'({m["created_at"]}, {m["source"]}, '
+                             f'conf {m["confidence"]:.1f})')
+            return f'History for "{kw}":\n' + "\n".join(lines)
+
+        if low.startswith("/auto"):
+            arg = t[5:].strip().lower()
+            if arg == "on":
+                self.auto_extract = True
+                return ("Auto-extraction ON: after each reply I will suggest "
+                        "facts worth saving. Nothing is saved without you.")
+            if arg == "off":
+                self.auto_extract = False
+                return "Auto-extraction OFF."
+            return f"Auto-extraction is {'ON' if self.auto_extract else 'OFF'}. Use /auto on|off."
 
         if low.startswith("/undo"):
             if not self._last_saved_id:
@@ -233,6 +263,40 @@ class MemoryAgent:
 
     # ------------------------------------------------------------------
 
+
+    EXTRACT_PROMPT = (
+        "Review the user's last message. If it contains ONE new lasting fact "
+        "about the user (identity, preference, plan, relationship, work), "
+        "reply ONLY with JSON: {\"keyword\": \"one or two words\", "
+        "\"fact\": \"the fact, third person\"}. "
+        "If nothing is worth remembering long-term, reply ONLY: NONE")
+
+    def _suggest_memory(self, user_input: str) -> str:
+        """Ask the backend to propose one memory candidate. Returns a
+        suggestion line or empty string. Never saves anything itself."""
+        if not (self.auto_extract and self.backend):
+            return ""
+        try:
+            raw = self.backend.chat(self.EXTRACT_PROMPT, user_input).strip()
+            if raw.upper().startswith("NONE"):
+                return ""
+            import json as _json
+            start, end = raw.find("{"), raw.rfind("}")
+            if start == -1 or end == -1:
+                return ""
+            cand = _json.loads(raw[start:end + 1])
+            kw = str(cand.get("keyword", "")).strip()
+            fact = str(cand.get("fact", "")).strip()
+            if not kw or not fact:
+                return ""
+            if self.store.find_similar(kw, fact, threshold=0.5):
+                return ""     # already known
+            quoted = f'"{kw}"' if " " in kw else kw
+            return (f"\n\n[memory suggestion] Worth remembering? "
+                    f"Type:  /save {quoted} {fact}")
+        except Exception:
+            return ""         # extraction must never break the chat
+
     def _system_with_memory(self, user_input: str) -> str:
         ctx = self.store.build_context(
             query=user_input, top_k=self.top_k,
@@ -249,7 +313,7 @@ class MemoryAgent:
         reply = self.backend.chat(system, user_input, list(self.history))
         self.history.append({"role": "user", "content": user_input})
         self.history.append({"role": "assistant", "content": reply})
-        return reply
+        return reply + self._suggest_memory(user_input)
 
     def ask_stream(self, user_input: str):
         """Yields chunks. Commands yield a single chunk."""
@@ -269,6 +333,9 @@ class MemoryAgent:
         reply = "".join(pieces)
         self.history.append({"role": "user", "content": user_input})
         self.history.append({"role": "assistant", "content": reply})
+        suggestion = self._suggest_memory(user_input)
+        if suggestion:
+            yield suggestion
 
     def repl(self, stream: bool = True) -> None:
         print("memlayer — /help for commands, 'quit' to exit.\n")

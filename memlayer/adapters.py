@@ -125,6 +125,72 @@ class OpenAICompatBackend(BaseBackend):
                     yield delta
 
 
+class AnthropicBackend(BaseBackend):
+    """
+    Claude via Anthropic's native Messages API (streaming supported).
+
+    Get an API key at https://console.anthropic.com and either pass it
+    or set the ANTHROPIC_API_KEY environment variable.
+
+        backend = AnthropicBackend("claude-sonnet-4-6")
+    """
+
+    def __init__(self, model: str = "claude-sonnet-4-6",
+                 api_key: Optional[str] = None,
+                 base_url: str = "https://api.anthropic.com",
+                 max_tokens: int = 1024, temperature: float = 0.7):
+        import os
+        self.model = model
+        self.api_key = api_key or os.environ.get("ANTHROPIC_API_KEY", "")
+        if not self.api_key:
+            raise ValueError(
+                "Anthropic API key missing. Pass api_key=... or set the "
+                "ANTHROPIC_API_KEY environment variable.")
+        self.url = base_url.rstrip("/") + "/v1/messages"
+        self.max_tokens = max_tokens
+        self.temperature = temperature
+
+    def _headers(self):
+        return {"x-api-key": self.api_key,
+                "anthropic-version": "2023-06-01"}
+
+    def _payload(self, system, user, history, stream=False):
+        # Anthropic takes `system` separately; messages hold the turns
+        msgs = (history or []) + [{"role": "user", "content": user}]
+        p = {"model": self.model, "max_tokens": self.max_tokens,
+             "temperature": self.temperature,
+             "system": system, "messages": msgs}
+        if stream:
+            p["stream"] = True
+        return p
+
+    def chat(self, system_prompt, user_message, history=None) -> str:
+        data = _post_json(self.url,
+                          self._payload(system_prompt, user_message, history),
+                          headers=self._headers())
+        return "".join(b.get("text", "") for b in data.get("content", [])
+                       if b.get("type") == "text")
+
+    def chat_stream(self, system_prompt, user_message, history=None):
+        payload = self._payload(system_prompt, user_message, history,
+                                stream=True)
+        with _request(self.url, payload, headers=self._headers()) as resp:
+            for raw in resp:
+                line = raw.decode("utf-8").strip()
+                if not line.startswith("data:"):
+                    continue
+                data = line[5:].strip()
+                if not data:
+                    continue
+                event = json.loads(data)
+                if event.get("type") == "content_block_delta":
+                    piece = event.get("delta", {}).get("text", "")
+                    if piece:
+                        yield piece
+                elif event.get("type") == "message_stop":
+                    break
+
+
 class HuggingFaceBackend(BaseBackend):
     """In-process transformers pipeline. pip install memlayer[huggingface]"""
 
