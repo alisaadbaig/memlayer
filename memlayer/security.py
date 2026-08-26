@@ -82,6 +82,21 @@ class SecurityManager:
             return "Correct password. Memory unlocked for this session."
         return "Wrong password. Memory stays locked."
 
+    def change_password(self, old: str, new: str) -> str:
+        """Change the password (requires the current one)."""
+        if not self.secure:
+            return "Secure mode is not turned on for this store."
+        if not self.has_password():
+            return "No password set yet. Use /enable <password> to set one."
+        if not self.verify_password(old):
+            return "Current password is wrong. Password unchanged."
+        try:
+            self.set_password(new)
+        except ValueError as e:
+            return str(e)
+        self.unlocked = True
+        return "Password changed. Secure mode unlocked for this session."
+
     def lock(self) -> str:
         if not self.secure:
             return "Secure mode is not turned on for this store."

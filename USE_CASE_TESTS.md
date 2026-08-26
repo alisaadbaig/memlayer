@@ -50,6 +50,6 @@ works even if `pip install -e .` was skipped (it finds the package next to it).
 ## Before-release checklist
 
 - [ ] `python3 tests/test_all_usecases.py --with-model` → all passed
-- [ ] `pytest tests/ -v` → 35 passed (unit-level suite)
+- [ ] `pytest tests/ -v` → 41 passed (unit-level suite)
 - [ ] Manual checks 1–4 above done in a real terminal
 - [ ] Fresh venv on a clean folder: `pip install -e .` then quickstart works first try

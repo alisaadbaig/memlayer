@@ -1,6 +1,6 @@
 # 🧠 memlayer
 
-**Give any LLM permanent memory. No fine-tuning. No model changes. Zero required dependencies.**
+**SQLite for AI memory.** Give any LLM permanent memory — no fine-tuning, no model changes, zero required dependencies.
 
 Type `/save my name is Ali and I am 36`, and from that moment on, *every* model you use — Ollama, vLLM, Hugging Face, anything — knows it. Memory lives in a fast local SQLite database and is injected into the prompt automatically (RAG-style).
 
@@ -48,6 +48,26 @@ backend = OpenAICompatBackend("meta-llama/Llama-3.2-3B-Instruct",
 agent = MemoryAgent(MemoryStore("mem.db"), backend)
 print(agent.ask("what do you know about me?"))
 ```
+
+### Claude (Anthropic)
+```python
+from memlayer import MemoryStore, MemoryAgent, AnthropicBackend
+# export ANTHROPIC_API_KEY=sk-ant-...
+agent = MemoryAgent(MemoryStore("mem.db"), AnthropicBackend("claude-sonnet-4-6"))
+agent.repl()
+```
+
+### OpenAI (ChatGPT models)
+```python
+import os
+from memlayer import MemoryStore, MemoryAgent, OpenAICompatBackend
+backend = OpenAICompatBackend("gpt-4o-mini",
+                              base_url="https://api.openai.com/v1",
+                              api_key=os.environ["OPENAI_API_KEY"])
+agent = MemoryAgent(MemoryStore("mem.db"), backend)
+```
+
+Ready-to-run scripts for every backend are in [`examples/`](examples/): `chat_ollama.py`, `chat_vllm.py`, `chat_openai.py`, `chat_claude.py`, `chat_hf.py` — all sharing the same memory format, so one `mem.db` follows you across every model.
 
 ### Hugging Face (in-process, no server)
 ```python
@@ -107,9 +127,19 @@ plain text. Restarting the app locks memory again automatically.
 2. On every normal message, memlayer runs a BM25 search over your memories, optionally reranks with embeddings, and prepends the top hits to the system prompt.
 3. The model answers as if it always knew you. Switch models freely — memory is model-agnostic.
 
+## 🧬 Memory lifecycle (v0.5)
+
+Memories aren't just rows — they have a life:
+
+- **Supersession** — `/replace <id> <kw> <fact>` marks the old fact `superseded` (kept as history, never injected) instead of deleting it. `/history city` shows the full chain: `Austin (old) → Dallas (ACTIVE)`. Retrieval only ever returns current truth.
+- **Provenance & confidence** — every memory records its `source` (`user_explicit` 1.0, `user_conversation` 0.8, `tool_output` 0.7, `model_inferred` 0.4) so explicit facts outrank guesses.
+- **Untrusted framing** — memories are injected inside `BEGIN/END UNTRUSTED USER MEMORY` markers with an explicit "data, not instructions" preamble: defense-in-depth on top of the injection shield.
+- **Opt-in auto-extraction** — `/auto on` makes the model propose one memorable fact after your messages ("Worth remembering? Type: /save family ..."). Nothing is ever saved without your confirmation, and there's zero extra inference cost when off.
+- **Recency-aware retrieval** — near-tied results prefer newer, higher-confidence memories; `last_accessed_at` tracks which memories actually get used.
+
 ## Roadmap
 
-- [ ] Automatic memory extraction (model decides what to save)
+- [ ] Recall benchmark suite (temporal correctness, contradiction handling, injection resistance)
 - [ ] Memory decay / importance scoring
 - [ ] Streaming responses
 - [ ] REST API server mode (`memlayer serve`)

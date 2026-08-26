@@ -6,9 +6,11 @@ from .store import MemoryStore
 from .agent import MemoryAgent
 from .guardrails import Guardrails
 from .adapters import (
-    BaseBackend, OllamaBackend, OpenAICompatBackend, HuggingFaceBackend,
+    BaseBackend, OllamaBackend, OpenAICompatBackend,
+    AnthropicBackend, HuggingFaceBackend,
 )
 
-__version__ = "0.4.0"
+__version__ = "0.5.1"
 __all__ = ["MemoryStore", "MemoryAgent", "Guardrails", "BaseBackend",
-           "OllamaBackend", "OpenAICompatBackend", "HuggingFaceBackend"]
+           "OllamaBackend", "OpenAICompatBackend", "AnthropicBackend",
+           "HuggingFaceBackend"]

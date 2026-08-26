@@ -1,6 +1,6 @@
 # memlayer — Complete Testing Guide
 
-Two ways to test: **Part A** runs the automated suite (35 tests, ~1 second). **Part B** walks you through testing every feature by hand so you see each one working with your own eyes. Do both before any release.
+Two ways to test: **Part A** runs the automated suite (41 tests, ~1 second). **Part B** walks you through testing every feature by hand so you see each one working with your own eyes. Do both before any release.
 
 ---
 
@@ -18,7 +18,7 @@ pip install pytest
 pytest tests/ -v
 ```
 
-**Expected:** `35 passed` in about 1 second. Every feature (save, search, secure mode, guardrails, expiry, profiles, contradiction detection, export/import, streaming, speed) has at least one test. If anything fails, the test name tells you exactly which feature broke.
+**Expected:** `41 passed` in about 1 second. Every feature (save, search, secure mode, guardrails, expiry, profiles, contradiction detection, export/import, streaming, speed) has at least one test. If anything fails, the test name tells you exactly which feature broke.
 
 ---
 
@@ -205,7 +205,7 @@ rm -f test.db* sec.db* cli.db* speed.db* backup.json
 
 ## Release checklist
 
-- [ ] `pytest tests/ -v` → 35 passed
+- [ ] `pytest tests/ -v` → 41 passed
 - [ ] Manual tests 1–18 pass without a model
 - [ ] Test 19 passes with a real Ollama model (memory survives restart, streaming visible)
 - [ ] Test 19 repeated against vLLM or llama.cpp with `--backend openai --url ...`
