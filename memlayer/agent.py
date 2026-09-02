@@ -106,13 +106,28 @@ class MemoryAgent:
 
     # ------------------------------------------------------------------
 
+    MEMORY_CMDS = frozenset({
+        "/save", "/save!", "/replace", "/undo", "/search", "/memories",
+        "/list", "/forget", "/clear", "/stats", "/export", "/import",
+        "/block", "/unblock", "/blocked", "/history"})
+    ALL_CMDS = MEMORY_CMDS | {"/enable", "/passwd", "/lock", "/profile",
+                              "/auto", "/help"}
+
     def handle_command(self, text: str) -> Optional[str]:
         t = text.strip()
-        low = t.lower()
+        if not t.startswith("/"):
+            return None
+        # exact first-token matching: "/clearance levels" is NOT /clear
+        cmd, _, rest = t.partition(" ")
+        cmd = cmd.lower()
+        rest = rest.strip()
+        if cmd not in self.ALL_CMDS:
+            return (f"Unknown command {cmd}. Type /help for the list. "
+                    f"(Messages starting with / are treated as commands.)")
         sec = self.store.security
 
-        if low.startswith("/enable"):
-            password = t[7:].strip()
+        if cmd == "/enable":
+            password = rest
             if not password and sys.stdin.isatty():
                 import getpass
                 password = getpass.getpass("Password (hidden): ")
@@ -120,8 +135,7 @@ class MemoryAgent:
                 return "Usage: /enable <password>"
             return sec.enable(password)
 
-        if low.startswith("/passwd"):
-            rest = t[7:].strip()
+        if cmd == "/passwd":
             parts = rest.split()
             if len(parts) == 2:
                 old, new = parts
@@ -137,67 +151,51 @@ class MemoryAgent:
                         "(or just /passwd in a terminal for hidden prompts)")
             return sec.change_password(old, new)
 
-        if low.startswith("/lock"):
+        if cmd == "/lock":
             return sec.lock()
 
-        if low.startswith("/profile"):
-            name = t[8:].strip()
-            if not name:
+        if cmd == "/profile":
+            if not rest:
                 return f"Current profile: {self.store.user_id}"
-            self.store.switch_user(name)
+            self.store.switch_user(rest)
             self.history.clear()
             new_sec = self.store.security
             state = " (locked)" if (new_sec.secure and
                                     not new_sec.check()) else ""
-            return f"Switched to profile '{name}'{state}."
+            return f"Switched to profile '{rest}'{state}."
 
-        if low.startswith("/help"):
+        if cmd == "/auto":
+            arg = rest.lower()
+            if arg == "on":
+                self.auto_extract = True
+                return ("Auto-extraction ON: after each reply I will suggest "
+                        "facts worth saving. Nothing is saved without you.")
+            if arg == "off":
+                self.auto_extract = False
+                return "Auto-extraction OFF."
+            return (f"Auto-extraction is "
+                    f"{'ON' if self.auto_extract else 'OFF'}. Use /auto on|off.")
+
+        if cmd == "/help":
             return HELP
 
-        # everything below touches memory -> lock check
-        needs_unlock = ("/save", "/replace", "/undo", "/search", "/memories",
-                        "/list", "/forget", "/clear", "/stats", "/export",
-                        "/import", "/block", "/unblock", "/blocked", "/history")
-        if any(low.startswith(c) for c in needs_unlock) \
-                and not self.store.security.check():
+        # every remaining command touches memory -> lock check
+        if not sec.check():
             return LOCKED_MSG
 
-        if low.startswith("/blocked"):
-            terms = self.store.list_blocked()
-            return ("Prohibited terms: " + ", ".join(terms)) if terms \
-                else "No prohibited terms set. Add one with /block <term>."
+        if cmd == "/save!":
+            return self._do_save(rest, force=True)
+        if cmd == "/save":
+            return self._do_save(rest, force=False)
 
-        if low.startswith("/block "):
-            term = t[6:].strip()
-            if not term:
-                return "Usage: /block <term>"
-            self.store.add_blocked(term)
-            return (f'Added prohibited term "{term.lower()}". '
-                    f"Saves containing it will be refused.")
-
-        if low.startswith("/unblock"):
-            term = t[8:].strip()
-            if not term:
-                return "Usage: /unblock <term>"
-            return (f'Removed "{term.lower()}" from prohibited terms.'
-                    if self.store.remove_blocked(term)
-                    else f'"{term.lower()}" was not in the prohibited list.')
-
-        if low.startswith("/save!"):
-            return self._do_save(t[6:].strip(), force=True)
-        if low.startswith("/save"):
-            return self._do_save(t[5:].strip(), force=False)
-
-        if low.startswith("/replace"):
-            rest = t[8:].strip()
+        if cmd == "/replace":
             parts = rest.split(maxsplit=1)
             if len(parts) < 2:
                 return "Usage: /replace <id> <keyword> <fact>"
-            mem_id, remainder = parts
-            return self._do_save(remainder, force=True, supersedes=mem_id)
+            return self._do_save(parts[1], force=True, supersedes=parts[0])
 
-        if low.startswith("/history"):
-            kw = t[8:].strip().strip('"').strip("'")
+        if cmd == "/history":
+            kw = rest.strip('"').strip("'")
             if not kw:
                 return "Usage: /history <keyword>"
             chain = self.store.history(kw)
@@ -211,35 +209,23 @@ class MemoryAgent:
                              f'conf {m["confidence"]:.1f})')
             return f'History for "{kw}":\n' + "\n".join(lines)
 
-        if low.startswith("/auto"):
-            arg = t[5:].strip().lower()
-            if arg == "on":
-                self.auto_extract = True
-                return ("Auto-extraction ON: after each reply I will suggest "
-                        "facts worth saving. Nothing is saved without you.")
-            if arg == "off":
-                self.auto_extract = False
-                return "Auto-extraction OFF."
-            return f"Auto-extraction is {'ON' if self.auto_extract else 'OFF'}. Use /auto on|off."
-
-        if low.startswith("/undo"):
+        if cmd == "/undo":
             if not self._last_saved_id:
                 return "Nothing to undo."
             ok = self.store.forget(self._last_saved_id)
             mid, self._last_saved_id = self._last_saved_id, None
             return f"Removed [{mid}]." if ok else "Already removed."
 
-        if low.startswith("/search"):
-            q = t[7:].strip()
-            if not q:
+        if cmd == "/search":
+            if not rest:
                 return "Usage: /search <query>"
-            hits = self.store.search(q, top_k=5)
+            hits = self.store.search(rest, top_k=5)
             if not hits:
                 return "No matching memories."
             return "Matches:\n" + "\n".join(
                 f"[{m['id']}] ({m['keyword']}) {m['text']}" for m in hits)
 
-        if low.startswith(("/memories", "/list")):
+        if cmd in ("/memories", "/list"):
             mems = self.store.all()
             if not mems:
                 return "No memories saved yet."
@@ -247,17 +233,16 @@ class MemoryAgent:
                 f"[{m['id']}] ({m['keyword']}) {m['text']}  ({m['created_at']})"
                 for m in mems)
 
-        if low.startswith("/forget"):
-            mem_id = t[7:].strip()
-            if not mem_id:
+        if cmd == "/forget":
+            if not rest:
                 return "Usage: /forget <memory id>"
-            return (f"Forgot memory {mem_id}." if self.store.forget(mem_id)
-                    else f"No memory found with id {mem_id}.")
+            return (f"Forgot memory {rest}." if self.store.forget(rest)
+                    else f"No memory found with id {rest}.")
 
-        if low.startswith("/clear"):
+        if cmd == "/clear":
             return f"Cleared {self.store.clear()} memories."
 
-        if low.startswith("/stats"):
+        if cmd == "/stats":
             s = self.store.stats()
             kws = ", ".join(f"{k}: {v}" for k, v in
                             sorted(s["by_keyword"].items())) or "-"
@@ -266,22 +251,41 @@ class MemoryAgent:
                     f"DB size: {s['db_bytes']/1024:.1f} KB\n"
                     f"Oldest: {s['oldest']}  Newest: {s['newest']}")
 
-        if low.startswith("/export"):
-            fname = t[7:].strip() or "memlayer_export.json"
+        if cmd == "/export":
+            fname = rest or "memlayer_export.json"
             Path(fname).write_text(self.store.export_json(), encoding="utf-8")
             return f"Exported {self.store.count()} memories to {fname}"
 
-        if low.startswith("/import"):
-            fname = t[7:].strip()
-            if not fname or not Path(fname).exists():
+        if cmd == "/import":
+            if not rest or not Path(rest).exists():
                 return "Usage: /import <file.json>  (file must exist)"
-            n = self.store.import_json(Path(fname).read_text(encoding="utf-8"))
+            try:
+                n = self.store.import_json(
+                    Path(rest).read_text(encoding="utf-8"))
+            except ValueError as e:
+                return f"Import rejected: {e}"
             return f"Imported {n} memories."
 
+        if cmd == "/blocked":
+            terms = self.store.list_blocked()
+            return ("Prohibited terms: " + ", ".join(terms)) if terms \
+                else "No prohibited terms set. Add one with /block <term>."
+
+        if cmd == "/block":
+            if not rest:
+                return "Usage: /block <term>"
+            self.store.add_blocked(rest)
+            return (f'Added prohibited term "{rest.lower()}". '
+                    f"Saves containing it will be refused.")
+
+        if cmd == "/unblock":
+            if not rest:
+                return "Usage: /unblock <term>"
+            return (f'Removed "{rest.lower()}" from prohibited terms.'
+                    if self.store.remove_blocked(rest)
+                    else f'"{rest.lower()}" was not in the prohibited list.')
+
         return None
-
-    # ------------------------------------------------------------------
-
 
     EXTRACT_PROMPT = (
         "Review the user's last message. If it contains ONE new lasting fact "

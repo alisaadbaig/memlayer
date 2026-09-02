@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "memlayer"
-version = "0.5.1"
+version = "0.5.2"
 description = "Give any LLM permanent memory — /save facts once, every backend remembers. Works with Ollama, vLLM, Hugging Face, and any OpenAI-compatible server. Zero required dependencies."
 readme = "README.md"
 requires-python = ">=3.9"

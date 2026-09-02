@@ -7,14 +7,19 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versioning: 
 
 ## [0.5.2] — 2026-08-27
 
-Third independent review round: four findings, all reproduced, fixed, and
-regression-tested.
+Third independent review round. Four issues were reproduced against the previous build, fixed in commit `ea3ed23`, and covered by regression tests.
 
 ### Fixed
-- **Malformed `/import` could permanently brick a profile (critical)** — a record with non-list `tags` poisoned the database so every read (`/memories`, `/export`) crashed with `KeyError`, with no recovery path. Imports are now fully validated before any write (invalid batches rejected atomically with a clear error; coercible oddities normalized), and reads are defensive: corrupted tags can never crash a profile again — existing damaged databases self-heal on read.
-- **Command prefix collisions could destroy data (critical)** — "/clearance levels at my job" matched `/clear` via `startswith` and silently wiped all memories; the same flaw affected every command ("/saveme", "/statistics", "/blocked-road", ...). Dispatch now matches the exact first token; unrecognized "/words" get an "Unknown command" reply instead of reaching the model or a command.
-- **Prompt-fence spoofing (critical)** — a memory containing the literal text "END UNTRUSTED USER MEMORY" could fake the fence boundary and hand the model direct instructions (confirmed against a live model by the reviewer). Fence-marker strings inside memory text are now neutralized to "[removed marker]" at injection time, unconditionally — fence integrity no longer depends on optional guardrails.
-- **`/replace` with a wrong id silently lied** — it reported "superseded" while leaving both contradictory facts active. The supersession UPDATE's rowcount is now checked: a bad id rolls back the whole operation and reports "No active memory found with id ... — nothing saved."
+- **Malformed `/import` could make a profile unreadable (critical)** — malformed backup records could write invalid metadata, causing later reads such as `/memories` and `/export` to fail. Import now validates the complete batch before any write, rejects truly invalid records atomically, and safely normalizes coercible values. Read-time parsing is also defensive, so previously damaged profiles recover automatically at the API/read layer without requiring manual database repair.
+- **Command prefix collisions could trigger destructive commands (critical)** — prefix matching meant normal text such as `/clearance levels at my job` could be interpreted as `/clear` and delete all memories. Command dispatch now matches the exact first token. Unknown slash-prefixed input receives an explicit `Unknown command` response, and collision cases such as `/saveme`, `/undoing`, `/statistics`, `/blocked-road`, `/exporting`, and `/historytest` are regression-tested.
+- **Prompt-fence spoofing could weaken memory-boundary integrity (critical)** — stored memory text containing `BEGIN/END UNTRUSTED USER MEMORY` could imitate the real prompt fence. Fence-marker text is now neutralized to `[removed marker]` at injection time, case-insensitively and independently of optional guardrails, so the assembled prompt contains exactly one trusted opening and closing fence.
+- **`/replace` with an invalid id reported success without superseding anything** — the supersession update now checks `rowcount`. If the target id does not refer to an active memory, the transaction is rolled back, no new memory is saved, and the user receives a clear error. Already-superseded memories cannot be superseded again.
+
+### Verification
+- `pytest tests/ -v` → **46 passed**
+- `python tests/test_all_usecases.py` → **25/25 passed**
+- `python tests/test_secure_mode.py` → **15/15 passed**
+- Package compilation and wheel build verified for `memlayer-0.5.2-py3-none-any.whl`.
 
 ## [0.5.1] — 2026-08-26
 
