@@ -434,3 +434,156 @@ def test_replace_with_bad_id_saves_nothing(tmp_path):
     assert "No active memory found" in r
     mems = a.store.all()
     assert len(mems) == 1 and "36" in mems[0]["text"]     # unchanged
+
+
+# ------------------------------------------------------------- tasks (v0.6)
+
+import threading
+import http.server
+import socketserver
+
+
+@pytest.fixture
+def web(tmp_path):
+    state = {"page": (b"<html><script>x()</script><body><h1>BTC</h1>"
+                      b"<p>Price is $112,000 &amp; rising.</p></body></html>")}
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write(state["page"])
+        def log_message(self, *a): pass
+
+    srv = socketserver.TCPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    yield f"http://127.0.0.1:{srv.server_address[1]}", state
+    srv.shutdown()
+
+
+def test_task_fetch_strips_html_and_tags_provenance(tmp_path, web):
+    url, _ = web
+    a = MemoryAgent(MemoryStore(str(tmp_path / "t.db"), user_id="ali"))
+    a.ask(f"/task add btc price {url}/x")
+    r = a.ask("/task run btc")
+    assert "saved" in r
+    m = a.store.all()[-1]
+    assert "$112,000" in m["text"] and "script" not in m["text"]
+    assert "&" in m["text"]                       # entity unescaped
+    assert m["source"] == "tool_output" and m["confidence"] == 0.7
+
+
+def test_task_rerun_supersedes(tmp_path, web):
+    url, state = web
+    a = MemoryAgent(MemoryStore(str(tmp_path / "t.db"), user_id="ali"))
+    a.ask(f"/task add btc price {url}/x")
+    a.ask("/task run btc")
+    state["page"] = b"<html><body>Price dropped to $95,000.</body></html>"
+    r = a.ask("/task run btc")
+    assert "superseded previous fetch" in r
+    active = [m for m in a.store.all() if m["keyword"] == "price"]
+    assert len(active) == 1 and "$95,000" in active[0]["text"]
+    ctx = a.store.build_context("price")
+    assert "$95,000" in ctx and "$112,000" not in ctx
+
+
+def test_task_errors_and_lock(tmp_path, web):
+    url, _ = web
+    a = MemoryAgent(MemoryStore(str(tmp_path / "t.db"), user_id="ali"))
+    assert "No task named" in a.ask("/task run ghost")
+    assert "http://" in a.ask("/task add bad kw ftp://nope")   # scheme refused
+    assert "Usage" in a.ask("/task add onlyname")
+    b = MemoryAgent(MemoryStore(str(tmp_path / "s.db"), user_id="x",
+                                secure=True))
+    assert "locked" in b.ask("/task list").lower()
+
+
+# ------------------------------------------------ hybrid retrieval (v0.7)
+
+import hashlib
+import math as _math
+
+
+class ToyEmbedder:
+    """Deterministic embedder with a tiny synonym map — lets us test
+    semantic retrieval without downloading a real model."""
+    SYNONYMS = {"biryani": "food", "cuisine": "food", "eat": "food",
+                "bmw": "vehicle", "car": "vehicle",
+                "dallas": "place", "city": "place", "live": "place"}
+
+    def _token_vec(self, tok):
+        tok = self.SYNONYMS.get(tok, tok)
+        h = hashlib.sha256(tok.encode()).digest()
+        v = [(b - 127.5) / 127.5 for b in h[:32]]
+        n = _math.sqrt(sum(x * x for x in v))
+        return [x / n for x in v]
+
+    def encode(self, texts):
+        out = []
+        for t in texts:
+            toks = [w for w in t.lower().split() if w.isalpha()]
+            vecs = [self._token_vec(w) for w in toks] or [self._token_vec("x")]
+            s = [sum(col) for col in zip(*vecs)]
+            n = _math.sqrt(sum(x * x for x in s)) or 1.0
+            out.append([x / n for x in s])
+        return out
+
+
+def test_semantic_finds_biryani_for_food(tmp_path):
+    """The flagship case: zero word overlap, meaning-only match."""
+    s = MemoryStore(str(tmp_path / "h.db"), user_id="ali",
+                    embedder=ToyEmbedder())
+    s.save("loves biryani above everything", keyword="taste")
+    s.save("drives a bmw daily", keyword="ride")
+    s.save("settled in dallas recently", keyword="home")
+    assert s.search("biryani", strategy="lexical")            # sanity
+    # ZERO word overlap: lexical genuinely cannot connect food -> biryani
+    assert not [m for m in s.search("favorite food", strategy="lexical")
+                if "biryani" in m["text"]]
+    hits = s.search("favorite food", strategy="hybrid", top_k=1)
+    assert hits and "biryani" in hits[0]["text"]              # hybrid can
+    hits = s.search("preferred vehicle", strategy="semantic", top_k=1)
+    assert hits and "bmw" in hits[0]["text"]
+
+
+def test_hybrid_exact_words_still_win(tmp_path):
+    """BM25's strength (exact ids/names) must survive fusion."""
+    s = MemoryStore(str(tmp_path / "h2.db"), user_id="ali",
+                    embedder=ToyEmbedder())
+    for i in range(20):
+        s.save(f"random note number {i}", keyword="note")
+    s.save("invoice 4521 is unpaid", keyword="billing")
+    hits = s.search("invoice 4521", strategy="hybrid", top_k=1)
+    assert "4521" in hits[0]["text"]
+
+
+def test_embeddings_backfill_and_cache_invalidation(tmp_path):
+    s = MemoryStore(str(tmp_path / "h3.db"), user_id="ali")   # no embedder
+    s.save("Ali loves biryani", keyword="taste")
+    s2 = MemoryStore(str(tmp_path / "h3.db"), user_id="ali",
+                     embedder=ToyEmbedder())                  # added later
+    hits = s2.search("favorite food", strategy="semantic", top_k=1)
+    assert hits and "biryani" in hits[0]["text"]              # backfilled
+    s2.save("Ali also enjoys karahi cuisine", keyword="taste")
+    hits = s2.search("food ali enjoys", strategy="semantic", top_k=2)
+    assert any("karahi" in m["text"] for m in hits)           # cache refreshed
+
+
+def test_broken_embedder_falls_back_to_lexical(tmp_path):
+    class Broken:
+        def encode(self, texts):
+            raise RuntimeError("model server down")
+    s = MemoryStore(str(tmp_path / "h4.db"), user_id="ali", embedder=Broken())
+    s.save("Ali loves biryani", keyword="taste")
+    hits = s.search("biryani", strategy="hybrid", top_k=1)    # must not crash
+    assert hits and "biryani" in hits[0]["text"]
+
+
+def test_superseded_memories_excluded_from_semantic(tmp_path):
+    s = MemoryStore(str(tmp_path / "h5.db"), user_id="ali",
+                    embedder=ToyEmbedder())
+    old = s.save("Ali lives in austin", keyword="home")
+    s.supersede(old["id"], "Ali lives in dallas", keyword="home")
+    hits = s.search("current city", strategy="semantic", top_k=2)
+    assert all("austin" not in m["text"] for m in hits)

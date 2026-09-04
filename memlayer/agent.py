@@ -28,6 +28,8 @@ HELP = (
     "  /block <term> /unblock <term>  — manage prohibited terms\n"
     "  /history <keyword>            — see current + superseded versions\n"
     "  /auto on|off                  — suggest memories from conversation\n"
+    "  /task add <name> <kw> <url>   — define a URL-fetch task\n"
+    "  /task run|list|remove ...     — run tasks; re-runs supersede old data\n"
     "  /blocked                      — list prohibited terms\n"
     "  /profile <name>               — switch memory profile\n"
     "  /enable [password]  /lock     — secure mode unlock / lock\n"
@@ -66,6 +68,7 @@ class MemoryAgent:
         self.history: deque = deque(maxlen=history_turns * 2)
         self._last_saved_id: Optional[str] = None
         self.auto_extract = False
+        self._tasks = None
 
     # ------------------------------------------------------------------
     # save helper (expiry flag, contradiction check, force)
@@ -109,7 +112,7 @@ class MemoryAgent:
     MEMORY_CMDS = frozenset({
         "/save", "/save!", "/replace", "/undo", "/search", "/memories",
         "/list", "/forget", "/clear", "/stats", "/export", "/import",
-        "/block", "/unblock", "/blocked", "/history"})
+        "/block", "/unblock", "/blocked", "/history", "/task"})
     ALL_CMDS = MEMORY_CMDS | {"/enable", "/passwd", "/lock", "/profile",
                               "/auto", "/help"}
 
@@ -182,6 +185,32 @@ class MemoryAgent:
         # every remaining command touches memory -> lock check
         if not sec.check():
             return LOCKED_MSG
+
+        if cmd == "/task":
+            from .tasks import TaskManager
+            if self._tasks is None:
+                self._tasks = TaskManager(self.store)
+            parts = rest.split(maxsplit=1)
+            sub = parts[0].lower() if parts else ""
+            arg = parts[1] if len(parts) > 1 else ""
+            if sub == "add":
+                p = arg.split(maxsplit=2)
+                if len(p) < 3:
+                    return ("Usage: /task add <name> <keyword> <url>\n"
+                            "e.g.  /task add news headlines https://example.com")
+                return self._tasks.add(p[0], p[1], p[2])
+            if sub == "run":
+                if not arg:
+                    return "Usage: /task run <name>"
+                return self._tasks.run(arg)
+            if sub == "list":
+                return self._tasks.list()
+            if sub == "remove":
+                if not arg:
+                    return "Usage: /task remove <name>"
+                return self._tasks.remove(arg)
+            return ("Usage: /task add <name> <keyword> <url> | "
+                    "/task run <name> | /task list | /task remove <name>")
 
         if cmd == "/save!":
             return self._do_save(rest, force=True)

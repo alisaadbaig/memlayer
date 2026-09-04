@@ -5,6 +5,23 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versioning: 
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-08-27
+
+### Added
+- **Hybrid semantic retrieval** — `store.search(query, strategy=...)` with `lexical` (BM25), `semantic` (full exact cosine scan over all active memories — no candidate pruning, so old memories are never missed), `hybrid` (Reciprocal Rank Fusion of both + confidence bonus), and `auto` (hybrid when an embedder is configured, else lexical). Solves the classic miss: "favorite food" now retrieves "loves biryani" despite zero word overlap, while exact tokens like "invoice 4521" still win via BM25.
+- **Pluggable embedders** — `SentenceTransformerEmbedder` (pip extra) and `OllamaEmbedder` (talks to a local Ollama `/api/embed`, e.g. `nomic-embed-text` — zero Python installs); any object with `.encode(list[str])` works via `MemoryStore(..., embedder=...)`.
+- **Automatic backfill** — memories saved before an embedder existed are embedded lazily on first semantic search (`ensure_embeddings()`), with an in-RAM vector cache invalidated on every mutation.
+- Graceful degradation: a failing embedder logs once and falls back to lexical — semantic search can never break retrieval.
+
+### Changed
+- Superseded memories are excluded from semantic search (consistent with lexical).
+
+## [0.6.0] — 2026-08-27
+
+### Added
+- **Tasks** — `/task add <name> <keyword> <url>` defines a named fetch task; `/task run` downloads the URL (http/https only, 500KB cap), strips HTML to plain text (~1200 chars), and saves it under the keyword with `tool_output` provenance (confidence 0.7). Re-running a task **supersedes** its previous fetch, so the prompt always carries exactly one current version. `/task list`, `/task remove`; all task operations respect the secure-mode lock, guardrails, and the persistent blocklist. Zero new dependencies.
+- **Documentation** — `docs/SECURITY.md` (secure mode, setting/changing/resetting passwords, what is and isn't protected, guardrails, the four-layer injection defense, hardening checklist) and `docs/USAGE.md` (full command reference, 7 worked use cases, Python API, troubleshooting).
+
 ## [0.5.2] — 2026-08-27
 
 Third independent review round: four findings, all reproduced, fixed, and

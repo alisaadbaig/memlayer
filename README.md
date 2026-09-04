@@ -14,7 +14,7 @@ Assistant: You're 36, Ali!
 
 ## Why memlayer?
 
-- ⚡ **Fast** — SQLite FTS5 full-text search with BM25 ranking. Searches thousands of memories in microseconds, no vector DB required.
+- ⚡ **Hybrid retrieval** — BM25 when words matter ("invoice 4521"), embeddings when meaning matters ("favorite food" → biryani), fused with Reciprocal Rank Fusion. One SQLite file, no vector database. Semantic layer is optional: `use_embeddings=True` (sentence-transformers) or `embedder=OllamaEmbedder()` — zero pip installs if you already run Ollama.
 - 🔌 **Works with everything** — Ollama, vLLM, LM Studio, llama.cpp server, OpenAI, Groq, or any Hugging Face model in-process. One line to switch backends; your memories follow you.
 - 📦 **Zero required dependencies** — core is pure Python standard library. Optional extras add semantic search and in-process HF models.
 - 👥 **Multi-user** — isolate memories per `user_id` in one database.
@@ -136,6 +136,24 @@ Memories aren't just rows — they have a life:
 - **Untrusted framing** — memories are injected inside `BEGIN/END UNTRUSTED USER MEMORY` markers with an explicit "data, not instructions" preamble: defense-in-depth on top of the injection shield.
 - **Opt-in auto-extraction** — `/auto on` makes the model propose one memorable fact after your messages ("Worth remembering? Type: /save family ..."). Nothing is ever saved without your confirmation, and there's zero extra inference cost when off.
 - **Recency-aware retrieval** — near-tied results prefer newer, higher-confidence memories; `last_accessed_at` tracks which memories actually get used.
+
+## 🌐 Tasks: live data into memory (v0.6)
+
+```
+/task add weather forecast https://wttr.in/Dallas?format=3
+/task run weather                 ← fetch → memory under keyword "forecast"
+/task run weather                 ← tomorrow: SUPERSEDES yesterday's data
+```
+
+Fetched text is HTML-stripped, size-capped, saved with `tool_output`
+provenance (0.7 confidence — never outranks what you typed), filtered by
+your guardrails, and re-runs keep exactly one current version in the prompt.
+
+## 📚 Documentation
+
+- [docs/USAGE.md](docs/USAGE.md) — command reference + 7 worked use cases
+- [docs/SECURITY.md](docs/SECURITY.md) — secure mode, password reset, guardrails, injection defenses
+- [CHANGELOG.md](CHANGELOG.md) · [TESTING.md](TESTING.md)
 
 ## Roadmap
 
